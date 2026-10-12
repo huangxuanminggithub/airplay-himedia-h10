@@ -53,7 +53,11 @@ chmod +x gradlew
 
 Gradle 在 CMake 配置前将 `app/src/main/cpp/patches/UxPlay/` 补丁应用到锁定版本的 UxPlay；补丁属于源码的一部分。历史构建目标 `mvp`、`mvpHevc`、`mvpHevc60` 保留用于参考，当前验收目标是 `mvpH10Display60`。历史说明见 [README-MVP.txt](README-MVP.txt)，其中早期默认值和旧包名不代表当前部署配置。
 
-上游 APK 发布工作流未迁入本仓库：它构建上游 release 目标、依赖签名 secrets，并非本稳定版的构建入口。请使用以上本地构建命令。
+### GitHub 自动构建
+
+`.github/workflows/h10-stable.yml` 在每次推送 `main` 时自动构建，也可在 Actions → **Build H10 stable APK** → **Run workflow** 手动运行。它固定构建 `mvpH10Display60`，执行翻译校验与原生回归测试，校验包名、版本、ARMv7 架构、中文名称和签名，然后生成 **airplay-h10-stable** 下载产物（APK、SHA-256、源码提交号及校验记录），保留 90 天。
+
+仓库 Actions 加密 secret `H10_DEBUG_KEYSTORE_BASE64` 保存现有盒子使用的调试签名。私钥不会提交到 Git 或上传为产物；CI 校验证书与现有安装一致，因此生成的 APK 可用于覆盖更新。复制仓库到其他账户后必须自行配置匹配的签名 secret。自动构建通过不代表重新完成了实机投屏、同步或延迟验收。
 
 ## 安装与配置
 
