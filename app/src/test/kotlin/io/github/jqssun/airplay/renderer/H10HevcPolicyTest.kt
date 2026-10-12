@@ -15,6 +15,12 @@ class H10HevcPolicyTest {
         assertTrue(H10HevcPolicy.accepts("Hi3798CV200", "bigfish", 24, H10HevcPolicy.DECODER, firmware))
     }
 
+    @Test fun acceptsCapturedAndroidFrameworkModelWithFirmwareGuard() {
+        assertTrue(H10HevcPolicy.accepts("H10四代", "bigfish", 24, H10HevcPolicy.DECODER, firmware))
+        assertFalse(H10HevcPolicy.accepts("H10四代", "bigfish", 24, H10HevcPolicy.DECODER))
+        assertFalse(H10HevcPolicy.accepts("H10二代", "bigfish", 24, H10HevcPolicy.DECODER, firmware))
+    }
+
     @Test fun chipNameAloneDoesNotEnableAdaptation() {
         assertFalse(H10HevcPolicy.accepts("Hi3798CV200", "bigfish", 24, H10HevcPolicy.DECODER))
         assertFalse(H10HevcPolicy.accepts("Hi3798CV200", "bigfish", 24, H10HevcPolicy.DECODER, firmware.replace("HMD-2.1.6", "OtherROM")))

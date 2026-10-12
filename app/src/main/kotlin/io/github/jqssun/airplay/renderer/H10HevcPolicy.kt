@@ -14,8 +14,8 @@ object H10HevcPolicy {
         // session reported H10-G4. Require the exact inspected firmware for that
         // alias; other HiSilicon models/firmwares retain the upstream policy.
         val knownModel = normalizedModel.equals("H10G4", ignoreCase = true) ||
-            (normalizedModel.equals("Hi3798CV200", ignoreCase = true) &&
-                fingerprint == BOOT_FINGERPRINT)
+            ((normalizedModel.equals("Hi3798CV200", ignoreCase = true) ||
+                normalizedModel == "H10四代") && fingerprint == BOOT_FINGERPRINT)
         return knownModel && hardware.equals("bigfish", ignoreCase = true) &&
             sdk == 24 && decoder.equals(DECODER, ignoreCase = true)
     }
