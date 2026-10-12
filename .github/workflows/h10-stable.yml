@@ -36,10 +36,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          { yes || true; } | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/dev/null
-          sdkmanager --sdk_root="$ANDROID_HOME" \
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential ninja-build perl curl unzip python3
+          export ANDROID_HOME="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          tools_archive="$RUNNER_TEMP/commandlinetools.zip"
+          curl --fail --location --retry 3 \
+            https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip \
+            --output "$tools_archive"
+          printf '%s  %s\n' 4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583 "$tools_archive" | sha256sum --check
+          unzip -q "$tools_archive" -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          { yes || true; } | "$sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null
+          "$sdkmanager" --sdk_root="$ANDROID_HOME" \
             'platforms;android-36' 'build-tools;36.0.0' \
             'ndk;27.0.12077973' 'cmake;3.22.1'
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           python3 tools/check-localization.py
 
       - name: Restore the H10 debug signing key
