@@ -95,7 +95,7 @@ class DecoderSelector(private val ctx: Context) {
     }
 
     private fun _h10Hevc(decoder: String) = BuildConfig.H10_HEVC_MVP &&
-        H10HevcPolicy.accepts(Build.MODEL, Build.HARDWARE, Build.VERSION.SDK_INT, decoder)
+        H10HevcPolicy.accepts(Build.MODEL, Build.HARDWARE, Build.VERSION.SDK_INT, decoder, Build.FINGERPRINT)
 
     fun adaptive(info: MediaCodecInfo, mime: String) = !_inList(noAdaptive, info.name) &&
         runCatching { info.getCapabilitiesForType(mime).isFeatureSupported(CodecCapabilities.FEATURE_AdaptivePlayback) }
