@@ -1,0 +1,1 @@
+Frozen user-accepted H10 display60 v2. Context startup fix included; v3 initial direct Surface handoff excluded. APK version 0.0.31-mvp3-l10n1-h10display60v2. Third-party revisions in SUBMODULE-PINS.txt. Build mvpH10Display60.

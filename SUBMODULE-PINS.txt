@@ -1,0 +1,4 @@
+ 462153392f2e30937424922039ff9f0cda5e7b1a app/src/main/cpp/third_party/UxPlay (4621533)
+ 38b88335f99e76ed89ff3c93f877fdefce736c13 app/src/main/cpp/third_party/ffmpeg (38b8833)
+ f41b1ea67045e0c09339974d83e389972d84f166 app/src/main/cpp/third_party/libplist (f41b1ea)
+ 4edd36a8dab5f85a8f92650b5bdf6e0cab13aab8 app/src/main/cpp/third_party/openssl-cmake (heads/v3)
