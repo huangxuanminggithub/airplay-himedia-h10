@@ -53,6 +53,7 @@ jobs:
             'platforms;android-36' 'build-tools;36.0.0' \
             'ndk;27.0.12077973' 'cmake;3.22.1'
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           python3 tools/check-localization.py
 
