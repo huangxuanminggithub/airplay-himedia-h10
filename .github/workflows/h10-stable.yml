@@ -1,4 +1,4 @@
-name: Build H10 stable APK
+name: Build H10 V8 APK
 
 on:
   push:
@@ -74,7 +74,7 @@ jobs:
           set -euo pipefail
           chmod +x gradlew
           export SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
-          ./gradlew assembleMvpH10Display60 --no-daemon --console=plain --max-workers=2
+          ./gradlew testMvpH10Gl60UnitTest assembleMvpH10Gl60 --no-daemon --console=plain --max-workers=2
 
       - name: Run native regression tests
         shell: bash
@@ -91,9 +91,9 @@ jobs:
             --ks "$HOME/.android/debug.keystore" --ks-key-alias androiddebugkey \
             --ks-pass pass:android --key-pass pass:android \
             --out dist/airplay-h10-stable.apk \
-            app/build/outputs/apk/mvpH10Display60/app-mvpH10Display60.apk
+            app/build/outputs/apk/mvpH10Gl60/app-mvpH10Gl60.apk
           "$tools_dir/aapt" dump badging dist/airplay-h10-stable.apk > dist/apk-metadata.txt
-          grep -F "package: name='io.github.jqssun.airplay.mvph10display60' versionCode='32' versionName='0.0.31-mvp3-l10n1-h10display60v2'" dist/apk-metadata.txt
+          grep -F "package: name='io.github.jqssun.airplay.mvph10display60' versionCode='32' versionName='0.0.31-mvp3-l10n1-h10gl60v8'" dist/apk-metadata.txt
           grep -F "application-label:'客厅影院投屏'" dist/apk-metadata.txt
           grep -F "sdkVersion:'24'" dist/apk-metadata.txt
           if ! "$tools_dir/apksigner" verify --verbose --print-certs dist/airplay-h10-stable.apk > dist/signature.txt 2>&1; then
@@ -115,19 +115,19 @@ jobs:
           cat dist/SHA256SUMS
           {
             echo '## H10 stable APK'
-            echo '- Variant: mvpH10Display60 / h10display60v2'
+            echo '- Variant: mvpH10Gl60 / h10gl60v8'
             echo '- Package: io.github.jqssun.airplay.mvph10display60'
             echo '- Native architecture: armeabi-v7a / Android 7+'
             echo '- Signing certificate matches the existing H10 installation.'
-            echo '- Chinese resources and native regression tests passed.'
-            echo '- Download the APK from the airplay-h10-stable artifact below.'
+            echo '- Chinese resources, JVM and native regression tests passed.'
+            echo '- Download the APK from the airplay-h10-v8 artifact below.'
             echo '- Compilation does not re-run on-device mirroring or latency acceptance.'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload APK, checksum and verification records
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: airplay-h10-stable
+          name: airplay-h10-v8
           path: dist/*
           if-no-files-found: error
           compression-level: 0

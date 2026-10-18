@@ -10,6 +10,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.Player
+import io.github.jqssun.airplay.util.BatchedLogStore
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.service.AirPlayService
@@ -281,40 +282,32 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     // logs
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
-    private val _logLock = Any()
-    private val _logList = mutableListOf<String>()
     private val _dateFmt = object : ThreadLocal<SimpleDateFormat>() {
         override fun initialValue() = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     }
-
-    init {
-        loadPersistedLogs()
-    }
+    private val logStore = BatchedLogStore(
+        initial = runCatching {
+            if (logFile.exists()) logFile.readLines().takeLast(9999) else emptyList()
+        }.getOrDefault(emptyList()),
+        persist = { snapshot -> logFile.writeText(snapshot.joinToString("\n")) },
+        publish = { snapshot -> _logs.value = snapshot },
+    )
 
     fun addLog(msg: String) {
-        val line = "${_dateFmt.get()!!.format(Date())} $msg"
-        val snapshot: List<String>
-        synchronized(_logLock) {
-            _logList.add(line)
-            while (_logList.size > 9999) _logList.removeAt(0)
-            persistLogsLocked()
-            snapshot = _logList.toList()
-        }
-        _logs.value = snapshot
+        logStore.add("${_dateFmt.get()!!.format(Date())} $msg")
     }
 
-    fun clearLogs() {
-        synchronized(_logLock) {
-            _logList.clear()
-            runCatching { logFile.delete() }
-        }
-        _logs.value = emptyList()
+    fun clearLogs() = logStore.clear()
+
+    override fun onCleared() {
+        logStore.close()
+        super.onCleared()
     }
 
     fun exportLogs() {
         val ctx = getApplication<Application>()
         val file = File(ctx.cacheDir, "airplay_logs.txt")
-        file.writeText(_logList.joinToString("\n"))
+        file.writeText(logStore.snapshot().joinToString("\n"))
         val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -324,25 +317,6 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         val chooserTitle = io.github.jqssun.airplay.AppLanguage.localizedContext(ctx)
             .getString(io.github.jqssun.airplay.R.string.export_logs_chooser_title)
         ctx.startActivity(Intent.createChooser(intent, chooserTitle).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    }
-
-    private fun loadPersistedLogs() {
-        val snapshot: List<String>
-        synchronized(_logLock) {
-            val restored = runCatching {
-                if (logFile.exists()) logFile.readLines().takeLast(9999) else emptyList()
-            }.getOrDefault(emptyList())
-            _logList.clear()
-            _logList.addAll(restored)
-            snapshot = _logList.toList()
-        }
-        _logs.value = snapshot
-    }
-
-    private fun persistLogsLocked() {
-        runCatching {
-            logFile.writeText(_logList.joinToString("\n"))
-        }
     }
 
     // settings setters

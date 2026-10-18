@@ -14,6 +14,9 @@ import io.github.jqssun.airplay.renderer.DecoderSelector.Companion.videoCaps
 class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = { 0L }) {
 
     private val lock = Object()
+    // Input submission remains ordered while feedGlInput temporarily yields the
+    // codec monitor to output draining and session/surface operations.
+    private val inputFeedLock = Object()
     private val pipeline = VideoPipeline()
     val selector = DecoderSelector(ctx)
     private var avcDecoder: MediaCodecInfo? = null
@@ -28,7 +31,7 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
     // Independent H10 experiment: decoder -> SurfaceView, avoiding the latest-image GL blit.
     private var decoderSurface: Surface? = null
     @Volatile private var directOutput = false
-    private val renderThread = if (BuildConfig.H10_DIRECT_SURFACE)
+    private val renderThread = if (BuildConfig.H10_DIRECT_SURFACE || BuildConfig.H10_GL60_OPT)
         HandlerThread("H10FrameRendered").apply { start() } else null
     private val renderHandler = renderThread?.let { Handler(it.looper) }
     @Volatile private var renderGeneration = 0L
@@ -75,6 +78,13 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
     private var _audioClockFrames = 0L
     private var _lateOutputFrames = 0L
     private var _audioWaitUs = 0L
+    private val glPacer = H10GlFramePacer()
+    private var sourceFirstNs = 0L
+    private var sourceLastNs = 0L
+    private var sourceFrames = 0L
+    private var inputBasePtsNs = 0L
+    private var inputBaseMonoNs = 0L
+    private var inputLagDriftMs = 0L
 
     fun setResolution(w: Int, h: Int) {
         videoWidth = w
@@ -150,6 +160,7 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
     fun stopSession() = synchronized(lock) { stopCodec() }
 
     fun resetTiming(reason: String) = synchronized(lock) {
+        glPacer.reset()
         _ptsBaseUs = Long.MIN_VALUE
         _wallBaseNs = 0L
         _lastOutputPtsUs = Long.MIN_VALUE
@@ -163,6 +174,8 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
     }
 
     private fun _resetStats() {
+        sourceFirstNs = 0L; sourceLastNs = 0L; sourceFrames = 0L
+        inputBasePtsNs = 0L; inputBaseMonoNs = 0L; inputLagDriftMs = 0L
         fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
         droppedFrames = 0; framePacingJitterUs = 0
         _framesThisSec = 0; _bytesThisSec = 0
@@ -179,6 +192,7 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
             _bytesThisSec = 0
             _lastStatReset = now
             if (benchmarkLog) _emitBenchmarkLine()
+            sourceFirstNs = 0L; sourceLastNs = 0L; sourceFrames = 0L
         }
         _framesThisSec++
         _bytesThisSec += size
@@ -190,14 +204,36 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
             "jitter=${framePacingJitterUs}us frames=$frameCount " +
             "dropped=$droppedFrames codec=$codecName " +
             "res=${videoWidth}x${videoHeight} " +
-            "audioClockFrames=$_audioClockFrames audioWaitUs=$_audioWaitUs lateOutputFrames=$_lateOutputFrames"
+            "audioClockFrames=$_audioClockFrames audioWaitUs=$_audioWaitUs lateOutputFrames=$_lateOutputFrames" +
+            if (BuildConfig.H10_GL60_OPT) " sourceFps=" +
+                (if (sourceFrames > 1 && sourceLastNs > sourceFirstNs)
+                    (sourceFrames - 1) * 1e9 / (sourceLastNs - sourceFirstNs) else 0.0) +
+                " inputLagDriftMs=$inputLagDriftMs" else ""
         Log.i(BENCH_TAG, msg)
         benchmarkLogCallback?.invoke(msg)
     }
 
     fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+        if (BuildConfig.H10_GL60_OPT) synchronized(inputFeedLock) {
+            feedFrameLocked(data, ntpTimeNs, isH265)
+        } else feedFrameLocked(data, ntpTimeNs, isH265)
+    }
+
+    private fun feedFrameLocked(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
         synchronized(lock) {
             _updateStats(data.size)
+            if (BuildConfig.H10_GL60_OPT && ntpTimeNs > 0L) {
+                val now = System.nanoTime()
+                if (inputBasePtsNs == 0L || (sourceLastNs > 0L &&
+                    (ntpTimeNs < sourceLastNs - 750_000_000L || ntpTimeNs > sourceLastNs + 750_000_000L))) {
+                    inputBasePtsNs = ntpTimeNs
+                    inputBaseMonoNs = now
+                }
+                if (sourceFrames == 0L) sourceFirstNs = ntpTimeNs
+                sourceLastNs = ntpTimeNs
+                sourceFrames++
+                inputLagDriftMs = ((now - inputBaseMonoNs) - (ntpTimeNs - inputBasePtsNs)) / 1_000_000L
+            }
             if (videoWidth == 0 || videoHeight == 0) return
 
             if (codec == null || isH265 != currentH265) {
@@ -224,6 +260,10 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
         val c = codec ?: return
         // dropping a frame desyncs decoder until the next keyframe, but source would only send one on (re)connect
         val retries = if (firstFrameQueued) FEED_RETRIES else FIRST_FEED_RETRIES
+        if (BuildConfig.H10_GL60_OPT) {
+            feedGlInput(c, data, ntpTimeNs, retries)
+            return
+        }
         repeat(retries) {
             val idx = c.dequeueInputBuffer(FEED_WAIT_US)
             if (idx >= 0) {
@@ -237,6 +277,32 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
             }
             drainOutput()
         }
+        droppedFrames++
+        Log.w(TAG, "Decoder input queue full; dropping frame. drops=$droppedFrames")
+    }
+
+    private fun feedGlInput(c: MediaCodec, data: ByteArray, ntpTimeNs: Long, retries: Int) {
+        // A blocking dequeue while holding the renderer lock can starve the
+        // independent output drainer once the decoder's input pool fills up.
+        // Preserve the original wait budget, but poll without blocking and yield
+        // the monitor between polls so the GL acknowledgement can make progress.
+        val deadlineNs = System.nanoTime() + retries * FEED_WAIT_US * 1000L
+        do {
+            if (codec !== c) return // session stopped/replaced while the monitor yielded
+            val idx = c.dequeueInputBuffer(0L)
+            if (idx >= 0) {
+                val buf = c.getInputBuffer(idx) ?: return
+                buf.clear()
+                buf.put(data)
+                if (!firstFrameQueued) _firstInputAtNs = System.nanoTime()
+                c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000L, 0)
+                firstFrameQueued = true
+                return
+            }
+            drainOutput()
+            if (System.nanoTime() >= deadlineNs) break
+            lock.wait(2L)
+        } while (true)
         droppedFrames++
         Log.w(TAG, "Decoder input queue full; dropping frame. drops=$droppedFrames")
     }
@@ -330,10 +396,12 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
         }
         codec = c
         codecName = (if (h265) "H.265" else "H.264") + " (${c.name})"
-        if (BuildConfig.H10_DIRECT_SURFACE) {
+        if (BuildConfig.H10_DIRECT_SURFACE || BuildConfig.H10_GL60_OPT) {
             if (outputDrainThread == null) {
                 outputDrainRunning = true
                 outputDrainThread = Thread({
+                    if (BuildConfig.H10_GL60_OPT)
+                        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY)
                     while (true) {
                         synchronized(lock) {
                             if (!outputDrainRunning) return@Thread
@@ -372,6 +440,8 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
     }
 
     private fun stopCodec() {
+        pipeline.resetDecoderPresentation()
+        glPacer.reset()
         renderGeneration++
         lastDirectTargetNs = 0L
         lastDirectPtsUs = Long.MIN_VALUE
@@ -400,6 +470,10 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
         val c = codec ?: return
         val info = MediaCodec.BufferInfo()
         while (true) {
+            // Only wait for image acquisition, never for its audio/display deadline.
+            // Avoid asynchronous latest-buffer replacement without holding a codec
+            // output buffer or changing the accepted V5 audio-clock mapping.
+            if (BuildConfig.H10_GL60_OPT && pipeline.hasPendingDecoderDelivery()) return
             val idx = c.dequeueOutputBuffer(info, 0)
             if (idx < 0) break
             _recordOutputFrameTime()
@@ -448,10 +522,20 @@ class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = 
                         (lastDirectTargetNs + deltaUs * 1000).coerceIn(now + 8_000_000L, now + 50_000_000L)
                     else now + directLeadNs
                 }
+                if (BuildConfig.H10_GL60_OPT)
+                    renderTarget = glPacer.target(ptsUs, target, now)
                 lastDirectTargetNs = renderTarget
                 lastDirectPtsUs = ptsUs
-                c.releaseOutputBuffer(idx, renderTarget)
-                if (BuildConfig.H10_DIRECT_SURFACE) {
+                if (BuildConfig.H10_GL60_OPT && pipeline.useSourceTimestampMapping) {
+                    // This vendor's SurfaceTexture delivery still drops frames with
+                    // default Unix-epoch media PTS. Explicitly release at a monotonic
+                    // NOW timestamp, while EGL retains the unchanged audio deadline.
+                    // No decoded buffer is held waiting for the GL consumer.
+                    val deliveryNs = System.nanoTime()
+                    pipeline.mapDecoderPresentation(deliveryNs, renderTarget)
+                    c.releaseOutputBuffer(idx, deliveryNs)
+                } else c.releaseOutputBuffer(idx, renderTarget)
+                if (BuildConfig.H10_DIRECT_SURFACE || BuildConfig.H10_GL60_OPT) {
                     directDecodedFrames++
                     if (directLastReportNs == 0L) directLastReportNs = now
                     val elapsed = now - directLastReportNs

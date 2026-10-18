@@ -40,6 +40,7 @@ android {
         buildConfigField("boolean", "H10_HEVC_MVP", "false")
         buildConfigField("int", "H10_HEVC_MAX_FPS", "30")
         buildConfigField("boolean", "H10_DIRECT_SURFACE", "false")
+        buildConfigField("boolean", "H10_GL60_OPT", "false")
 
         externalNativeBuild {
             cmake {
@@ -97,6 +98,21 @@ android {
             applicationIdSuffix = ".mvph10display60"
             versionNameSuffix = "-mvp3-l10n1-h10display60v2"
             buildConfigField("boolean", "H10_DIRECT_SURFACE", "true")
+        }
+        // Diagnostic fallback: keep the accepted direct build available unchanged.
+        create("mvpH10Safe60") {
+            initWith(getByName("mvpH10Display60"))
+            matchingFallbacks += listOf("mvpH10Display60", "mvpHevc60", "mvpHevc", "mvp")
+            applicationIdSuffix = ".mvph10display60"
+            versionNameSuffix = "-mvp3-l10n1-h10safeGL1"
+            buildConfigField("boolean", "H10_DIRECT_SURFACE", "false")
+        }
+        create("mvpH10Gl60") {
+            initWith(getByName("mvpH10Safe60"))
+            matchingFallbacks += listOf("mvpH10Safe60", "mvpH10Display60", "mvpHevc60", "mvpHevc", "mvp")
+            applicationIdSuffix = ".mvph10display60"
+            versionNameSuffix = "-mvp3-l10n1-h10gl60v8"
+            buildConfigField("boolean", "H10_GL60_OPT", "true")
         }
         create("sanitize") {
             initWith(getByName("debug"))
